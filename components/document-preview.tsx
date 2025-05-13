@@ -21,6 +21,7 @@ import { useArtifact } from '@/hooks/use-artifact';
 import equal from 'fast-deep-equal';
 import { SpreadsheetEditor } from './sheet-editor';
 import { ImageEditor } from './image-editor';
+import { parseCodeBlockMarkers } from '@/lib/utils/code-markers';
 
 interface DocumentPreviewProps {
   isReadonly: boolean;
@@ -85,12 +86,16 @@ export function DocumentPreview({
   }
 
   const document: Document | null = previewDocument
-    ? previewDocument
+    ? {
+        ...previewDocument,
+        content: parseCodeBlockMarkers(previewDocument.content ?? '')
+          .cleanedCode,
+      }
     : artifact.status === 'streaming'
       ? {
           title: artifact.title,
           kind: artifact.kind,
-          content: artifact.content,
+          content: parseCodeBlockMarkers(artifact.content).cleanedCode,
           id: artifact.documentId,
           createdAt: new Date(),
           userId: 'noop',

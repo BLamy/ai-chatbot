@@ -3,10 +3,13 @@
 import { EditorView } from '@codemirror/view';
 import { EditorState, Transaction } from '@codemirror/state';
 import { python } from '@codemirror/lang-python';
+import { javascript } from '@codemirror/lang-javascript';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { basicSetup } from 'codemirror';
-import React, { memo, useEffect, useRef } from 'react';
-import { Suggestion } from '@/lib/db/schema';
+import React, { memo, useEffect, useRef, useMemo } from 'react';
+import type { Suggestion } from '@/lib/db/schema';
+
+export type CodeLanguage = 'python' | 'javascript' | 'typescript';
 
 type EditorProps = {
   content: string;
@@ -15,17 +18,66 @@ type EditorProps = {
   isCurrentVersion: boolean;
   currentVersionIndex: number;
   suggestions: Array<Suggestion>;
+  language?: CodeLanguage;
 };
 
-function PureCodeEditor({ content, onSaveContent, status }: EditorProps) {
+function detectLanguage(content: string): CodeLanguage {
+  // Simple language detection based on content
+  if (
+    content.includes('def ') ||
+    content.includes('import ') ||
+    content.includes('print(')
+  ) {
+    return 'python';
+  }
+
+  // Check for TypeScript-specific syntax
+  if (
+    content.includes(': ') ||
+    content.includes('interface ') ||
+    (content.includes('<') && content.includes('>'))
+  ) {
+    return 'typescript';
+  }
+
+  // Default to JavaScript
+  return 'javascript';
+}
+
+function getLanguageExtension(language: CodeLanguage) {
+  switch (language) {
+    case 'python':
+      return python();
+    case 'typescript':
+      return javascript({ typescript: true });
+    case 'javascript':
+    default:
+      return javascript();
+  }
+}
+
+function PureCodeEditor({
+  content,
+  onSaveContent,
+  status,
+  language,
+}: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<EditorView | null>(null);
+
+  const detectedLanguage = useMemo(() => {
+    return language || detectLanguage(content);
+  }, [content, language]);
 
   useEffect(() => {
     if (containerRef.current && !editorRef.current) {
       const startState = EditorState.create({
         doc: content,
-        extensions: [basicSetup, python(), oneDark],
+        extensions: [
+          basicSetup,
+          getLanguageExtension(detectedLanguage),
+          oneDark,
+        ],
       });
 
       editorRef.current = new EditorView({
@@ -63,13 +115,18 @@ function PureCodeEditor({ content, onSaveContent, status }: EditorProps) {
 
       const newState = EditorState.create({
         doc: editorRef.current.state.doc,
-        extensions: [basicSetup, python(), oneDark, updateListener],
+        extensions: [
+          basicSetup,
+          getLanguageExtension(detectedLanguage),
+          oneDark,
+          updateListener,
+        ],
         selection: currentSelection,
       });
 
       editorRef.current.setState(newState);
     }
-  }, [onSaveContent]);
+  }, [onSaveContent, detectedLanguage]);
 
   useEffect(() => {
     if (editorRef.current && content) {
@@ -106,6 +163,7 @@ function areEqual(prevProps: EditorProps, nextProps: EditorProps) {
   if (prevProps.status === 'streaming' && nextProps.status === 'streaming')
     return false;
   if (prevProps.content !== nextProps.content) return false;
+  if (prevProps.language !== nextProps.language) return false;
 
   return true;
 }

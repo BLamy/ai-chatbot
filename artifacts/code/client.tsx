@@ -1,5 +1,5 @@
 import { Artifact } from '@/components/create-artifact';
-import { CodeEditor } from '@/components/code-editor';
+import { CodeEditor, type CodeLanguage } from '@/components/code-editor';
 import {
   CopyIcon,
   LogsIcon,
@@ -12,9 +12,10 @@ import { toast } from 'sonner';
 import { generateUUID } from '@/lib/utils';
 import {
   Console,
-  ConsoleOutput,
-  ConsoleOutputContent,
+  type ConsoleOutput,
+  type ConsoleOutputContent,
 } from '@/components/console';
+import { parseCodeBlockMarkers } from '@/lib/utils/code-markers';
 
 const OUTPUT_HANDLERS = {
   matplotlib: `
@@ -64,37 +65,86 @@ function detectRequiredHandlers(code: string): string[] {
 
 interface Metadata {
   outputs: Array<ConsoleOutput>;
+  language: CodeLanguage;
+}
+
+// Direct executor function for JavaScript and TypeScript
+async function executeJsOrTs(
+  code: string,
+  language: CodeLanguage,
+): Promise<{
+  output: string;
+  error?: string;
+}> {
+  try {
+    // Load the WebContainer module dynamically to avoid React hook issues
+    const webcontainerModule = await import('@/lib/webcontainer/provider');
+    if (language === 'typescript') {
+      return await webcontainerModule.executeTypeScript(code);
+    }
+    return await webcontainerModule.executeJsCode(code);
+  } catch (err) {
+    console.error('Error executing JS/TS code:', err);
+    return {
+      output: '',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export const codeArtifact = new Artifact<'code', Metadata>({
   kind: 'code',
   description:
-    'Useful for code generation; Code execution is only available for python code.',
+    'Useful for code generation; Supports execution of Python, JavaScript, and TypeScript code.',
   initialize: async ({ setMetadata }) => {
+    // Parse the initial content to extract language and clean code
     setMetadata({
       outputs: [],
+      language: 'javascript',
     });
   },
-  onStreamPart: ({ streamPart, setArtifact }) => {
+  onStreamPart: ({ streamPart, setArtifact, setMetadata }) => {
     if (streamPart.type === 'code-delta') {
+      const rawContent = streamPart.content as string;
+
+      // Parse content to extract language and clean code
+      const { cleanedCode, language } = parseCodeBlockMarkers(rawContent);
+
       setArtifact((draftArtifact) => ({
         ...draftArtifact,
-        content: streamPart.content as string,
+        // Store the cleaned code for display
+        content: cleanedCode,
         isVisible:
           draftArtifact.status === 'streaming' &&
-          draftArtifact.content.length > 300 &&
-          draftArtifact.content.length < 310
+          cleanedCode.length > 300 &&
+          cleanedCode.length < 310
             ? true
             : draftArtifact.isVisible,
         status: 'streaming',
       }));
+
+      // Update language based on the parsed info
+      setMetadata((metadata) => ({
+        ...metadata,
+        language,
+      }));
     }
   },
-  content: ({ metadata, setMetadata, ...props }) => {
+  content: ({ metadata, setMetadata, content, ...props }) => {
+    // Language should already be determined and stored in metadata
+    const { cleanedCode, language } = parseCodeBlockMarkers(content || '');
+
     return (
       <>
-        <div className="px-1">
-          <CodeEditor {...props} />
+        <div className="relative px-1">
+          <div className="absolute top-2 right-3 z-10 text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground opacity-70">
+            {language === 'python'
+              ? 'Python'
+              : language === 'typescript'
+                ? 'TypeScript'
+                : 'JavaScript'}
+          </div>
+          <CodeEditor {...props} content={cleanedCode} language={language} />
         </div>
 
         {metadata?.outputs && (
@@ -115,10 +165,22 @@ export const codeArtifact = new Artifact<'code', Metadata>({
     {
       icon: <PlayIcon size={18} />,
       label: 'Run',
-      description: 'Execute code',
-      onClick: async ({ content, setMetadata }) => {
+      description: ({ content }) => {
+        const language = parseCodeBlockMarkers(content).language;
+        if (language === 'python') return 'Execute Python code';
+        if (language === 'javascript') return 'Execute JavaScript code';
+        if (language === 'typescript') return 'Execute TypeScript code';
+        return 'Execute code';
+      },
+      isDisabled: ({ content }) => {
+        // Enable Run button for Python, JavaScript, and TypeScript
+        const language = parseCodeBlockMarkers(content).language;
+        return !['python', 'javascript', 'typescript'].includes(language);
+      },
+      onClick: async ({ content, setMetadata, metadata }) => {
         const runId = generateUUID();
         const outputContent: Array<ConsoleOutputContent> = [];
+        const { cleanedCode, language } = parseCodeBlockMarkers(content);
 
         setMetadata((metadata) => ({
           ...metadata,
@@ -133,6 +195,73 @@ export const codeArtifact = new Artifact<'code', Metadata>({
         }));
 
         try {
+          // Execute JavaScript or TypeScript code with WebContainer
+          if (language === 'javascript' || language === 'typescript') {
+            setMetadata((metadata) => ({
+              ...metadata,
+              outputs: [
+                ...metadata.outputs.filter((output) => output.id !== runId),
+                {
+                  id: runId,
+                  contents: [
+                    {
+                      type: 'text',
+                      value: 'Running JavaScript in WebContainer...',
+                    },
+                  ],
+                  status: 'loading_packages',
+                },
+              ],
+            }));
+
+            // Execute with our direct function
+            setMetadata((metadata) => ({
+              ...metadata,
+              outputs: [
+                ...metadata.outputs.filter((output) => output.id !== runId),
+                {
+                  id: runId,
+                  contents: [
+                    {
+                      type: 'text',
+                      value: `Running ${language === 'typescript' ? 'TypeScript' : 'JavaScript'} code...`,
+                    },
+                  ],
+                  status: 'loading_packages',
+                },
+              ],
+            }));
+
+            const { output, error } = await executeJsOrTs(
+              cleanedCode,
+              language,
+            );
+
+            const success = !error;
+
+            setMetadata((metadata) => ({
+              ...metadata,
+              outputs: [
+                ...metadata.outputs.filter((output) => output.id !== runId),
+                {
+                  id: runId,
+                  contents: [
+                    {
+                      type: 'text',
+                      value: error
+                        ? `Error: ${error}`
+                        : output || 'Code executed successfully with no output',
+                    },
+                  ],
+                  status: success ? 'completed' : 'failed',
+                },
+              ],
+            }));
+
+            return;
+          }
+
+          // Execute Python code with Pyodide
           // @ts-expect-error - loadPyodide is not defined
           const currentPyodideInstance = await globalThis.loadPyodide({
             indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
@@ -179,8 +308,7 @@ export const codeArtifact = new Artifact<'code', Metadata>({
               }
             }
           }
-
-          await currentPyodideInstance.runPythonAsync(content);
+          await currentPyodideInstance.runPythonAsync(cleanedCode);
 
           setMetadata((metadata) => ({
             ...metadata,

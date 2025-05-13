@@ -28,6 +28,7 @@ import { textArtifact } from '@/artifacts/text/client';
 import equal from 'fast-deep-equal';
 import type { UseChatHelpers } from '@ai-sdk/react';
 import type { VisibilityType } from './visibility-selector';
+import { parseCodeBlockMarkers } from '@/lib/utils/code-markers';
 
 export const artifactDefinitions = [
   textArtifact,
@@ -253,7 +254,10 @@ function PureArtifact({
       }
     }
   }, [artifact.documentId, artifactDefinition, setMetadata]);
-
+  function cleanContent(content: string) {
+    const { cleanedCode } = parseCodeBlockMarkers(content);
+    return cleanedCode;
+  }
   return (
     <AnimatePresence>
       {artifact.isVisible && (
@@ -453,11 +457,11 @@ function PureArtifact({
             <div className="dark:bg-muted bg-background h-full overflow-y-scroll !max-w-full items-center">
               <artifactDefinition.content
                 title={artifact.title}
-                content={
+                content={cleanContent(
                   isCurrentVersion
                     ? artifact.content
-                    : getDocumentContentById(currentVersionIndex)
-                }
+                    : getDocumentContentById(currentVersionIndex),
+                )}
                 mode={mode}
                 status={artifact.status}
                 currentVersionIndex={currentVersionIndex}
